@@ -156,6 +156,7 @@ mod machine_id {
 pub mod machine_id {
     use std::error::Error;
     use std::ffi::c_int;
+    use std::process::Command;
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::RegKey;
 
@@ -163,10 +164,27 @@ pub mod machine_id {
         fn MachineUidIsWow64() -> c_int;
     }
 
-    /// Return machine id
+    /// Return machine UUID via WMIC, fallback to registry MachineGuid
     pub fn get_machine_id() -> Result<String, Box<dyn Error>> {
-        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        // First attempt: wmic csproduct get uuid
+        if let Ok(output) = Command::new("wmic")
+            .args(&["csproduct", "get", "uuid"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.eq_ignore_ascii_case("UUID") || trimmed.is_empty() {
+                        continue;
+                    }
+                    return Ok(trimmed.to_string());
+                }
+            }
+        }
 
+        // Fallback: registry key MachineGuid
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
         let flag = if unsafe { MachineUidIsWow64() == 1 } && cfg!(target_pointer_width = "32") {
             KEY_READ | KEY_WOW64_64KEY
         } else {
